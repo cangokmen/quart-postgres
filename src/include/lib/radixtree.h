@@ -278,6 +278,7 @@
 
 /* generate forward declarations necessary to use the radix tree */
 #ifdef RT_DECLARE
+#define RT_USE_QUART    
 
 typedef struct RT_RADIX_TREE RT_RADIX_TREE;
 typedef struct RT_ITER RT_ITER;

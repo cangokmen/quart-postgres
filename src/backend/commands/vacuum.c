@@ -81,6 +81,7 @@ int			vacuum_multixact_failsafe_age;
 double		vacuum_max_eager_freeze_failure_rate;
 bool		track_cost_delay_timing;
 bool		vacuum_truncate;
+bool		vacuum_use_quart;
 
 /*
  * Variables for cost-based vacuum delay. The defaults differ between

@@ -22,6 +22,7 @@
 #include "postgres.h"
 
 #include "access/tidstore.h"
+#include "commands/vacuum.h"
 #include "miscadmin.h"
 #include "nodes/bitmapset.h"
 #include "storage/lwlock.h"
@@ -96,6 +97,7 @@ typedef struct BlocktableEntry
 	(offsetof(BlocktableEntry, words) + \
 	sizeof(bitmapword) * (page)->header.nwords)
 #define RT_RUNTIME_EMBEDDABLE_VALUE
+#define RT_USE_QUART
 #include "lib/radixtree.h"
 
 #define RT_PREFIX shared_ts
@@ -108,6 +110,7 @@ typedef struct BlocktableEntry
 	(offsetof(BlocktableEntry, words) + \
 	sizeof(bitmapword) * (page)->header.nwords)
 #define RT_RUNTIME_EMBEDDABLE_VALUE
+#define RT_USE_QUART
 #include "lib/radixtree.h"
 
 /* Per-backend state for a TidStore */
@@ -411,9 +414,19 @@ TidStoreSetBlockOffsets(TidStore *ts, BlockNumber blkno, OffsetNumber *offsets,
 	}
 
 	if (TidStoreIsShared(ts))
-		shared_ts_set(ts->tree.shared, blkno, page);
+	{
+		if (vacuum_use_quart)
+			shared_ts_set_quart(ts->tree.shared, blkno, page);
+		else
+			shared_ts_set(ts->tree.shared, blkno, page);
+	}
 	else
-		local_ts_set(ts->tree.local, blkno, page);
+	{
+		if (vacuum_use_quart)
+			local_ts_set_quart(ts->tree.local, blkno, page);
+		else
+			local_ts_set(ts->tree.local, blkno, page);
+	}
 }
 
 /* Return true if the given TID is present in the TidStore */
