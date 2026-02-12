@@ -1826,11 +1826,11 @@ have_slot:
 	if (!found)
 	{
 		tree->ctl->num_keys++;
-		//elog(LOG, "Radix tree: inserted new key %" PRIu64, key);
+		/* elog(LOG, "Radix tree: inserted new key %" PRIu64, key); */
 	}
 	else
 	{
-		//elog(LOG, "Radix tree: updated existing key %" PRIu64, key);
+		/* elog(LOG, "Radix tree: updated existing key %" PRIu64, key); */
 	}
 
 	return found;
@@ -2227,18 +2227,23 @@ have_slot:
 	{
 		tree->ctl->num_keys++;
 		if (is_bridge)
-			//elog(LOG, "Radix tree (QuART): inserted new key %" PRIu64 " (dir=%s, counter=%d, BRIDGE)",
+			/*
+			elog(LOG, "Radix tree (QuART): inserted new key %" PRIu64 " (dir=%s, counter=%d, BRIDGE)",
 				 key, tree->ctl->fp_dir ? "asc" : "desc", tree->ctl->fp_reset_counter);
+			*/
 		else if (use_fast_path)
-			//elog(LOG, "Radix tree (QuART): inserted new key %" PRIu64 " (dir=%s, counter=%d, fast_path)",
+			/*
+			elog(LOG, "Radix tree (QuART): inserted new key %" PRIu64 " (dir=%s, counter=%d, fast_path)",
 				 key, tree->ctl->fp_dir ? "asc" : "desc", tree->ctl->fp_reset_counter);
+			*/
 		else
-			//elog(LOG, "Radix tree (QuART): inserted new key %" PRIu64 " (dir=%s, counter=%d)",
+			/* elog(LOG, "Radix tree (QuART): inserted new key %" PRIu64 " (dir=%s, counter=%d)",
 				 key, tree->ctl->fp_dir ? "asc" : "desc", tree->ctl->fp_reset_counter);
+			*/
 	}
 	else
 	{
-		//elog(LOG, "Radix tree (QuART): updated existing key %" PRIu64, key);
+		/* elog(LOG, "Radix tree (QuART): updated existing key %" PRIu64, key); */
 	}
 
 	return found;
