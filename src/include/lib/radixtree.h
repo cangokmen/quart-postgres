@@ -251,6 +251,19 @@
 #define RT_QUART_CHECK_ASCENDING RT_MAKE_NAME(quart_check_ascending)
 #define RT_QUART_CHECK_DESCENDING RT_MAKE_NAME(quart_check_descending)
 #define RT_QUART_UPDATE_FP RT_MAKE_NAME(quart_update_fp)
+/* quart.h internal helpers */
+#define RT_QUART_ADD_CHILD_4_CHANGE_FP		RT_MAKE_NAME(quart_add_child_4_change_fp)
+#define RT_QUART_ADD_CHILD_16_CHANGE_FP		RT_MAKE_NAME(quart_add_child_16_change_fp)
+#define RT_QUART_ADD_CHILD_48_CHANGE_FP		RT_MAKE_NAME(quart_add_child_48_change_fp)
+#define RT_QUART_ADD_CHILD_256_CHANGE_FP	RT_MAKE_NAME(quart_add_child_256_change_fp)
+#define RT_QUART_ADD_CHILD_4_PRESERVE_FP	RT_MAKE_NAME(quart_add_child_4_preserve_fp)
+#define RT_QUART_ADD_CHILD_16_PRESERVE_FP	RT_MAKE_NAME(quart_add_child_16_preserve_fp)
+#define RT_QUART_ADD_CHILD_48_PRESERVE_FP	RT_MAKE_NAME(quart_add_child_48_preserve_fp)
+#define RT_QUART_ADD_CHILD_256_PRESERVE_FP	RT_MAKE_NAME(quart_add_child_256_preserve_fp)
+#define RT_NODE_INSERT_CHANGE_FP			RT_MAKE_NAME(node_insert_change_fp)
+#define RT_NODE_INSERT_PRESERVE_FP			RT_MAKE_NAME(node_insert_preserve_fp)
+#define RT_QUART_INSERT_RECURSIVE_CHANGE_FP		RT_MAKE_NAME(quart_insert_recursive_change_fp)
+#define RT_QUART_INSERT_RECURSIVE_PRESERVE_FP	RT_MAKE_NAME(quart_insert_recursive_preserve_fp)
 #endif
 
 /* type declarations */
@@ -723,8 +736,14 @@ typedef struct RT_RADIX_TREE_CONTROL
 	/* QuART fast path state */
 	uint64		fp_last_key;		/* Last key inserted via fast path */
 	uint8		fp_dir;				/* Fast path direction: 0=asc, 1=desc */
-	uint16		fp_reset_counter;	/* Reset counter (300 iterations) */
+	uint16		fp_reset_counter;	/* Reset counter */
 	bool		fp_initialized;		/* Whether fast path is initialized */
+	RT_PTR_ALLOC fp;				/* Cached leaf-parent node pointer */
+	RT_PTR_ALLOC *fp_ref;			/* Pointer to slot holding fp in its parent */
+	RT_PTR_ALLOC fp_leaf;			/* Last inserted leaf pointer */
+	int			fp_shift;			/* Shift level of the fp node */
+	RT_PTR_ALLOC fp_path[RT_MAX_LEVEL]; /* Path from root to fp */
+	int			fp_path_length;		/* Number of entries in fp_path */
 #endif
 }			RT_RADIX_TREE_CONTROL;
 
@@ -1837,13 +1856,9 @@ have_slot:
 }
 
 #ifdef RT_USE_QUART
-/*
- * QuART stail_reset_bidir optimization for sequential insertions.
- * This function uses a bidirectional fast path tracking mechanism to
- * optimize sequential insertion patterns (both ascending and descending).
- * It maintains a reset counter to periodically reset the fast path,
- * preventing pathological behavior.
- */
+#include "lib/quart.h"
+
+#if 0 /* old built-in QuART stail_reset_bidir implementation (replaced by quart.h) */
 RT_SCOPE bool
 RT_SET_QUART(RT_RADIX_TREE * tree, uint64 key, RT_VALUE_TYPE * value_p)
 {
@@ -2226,20 +2241,6 @@ have_slot:
 	if (!found)
 	{
 		tree->ctl->num_keys++;
-		if (is_bridge)
-			/*
-			elog(LOG, "Radix tree (QuART): inserted new key %" PRIu64 " (dir=%s, counter=%d, BRIDGE)",
-				 key, tree->ctl->fp_dir ? "asc" : "desc", tree->ctl->fp_reset_counter);
-			*/
-		else if (use_fast_path)
-			/*
-			elog(LOG, "Radix tree (QuART): inserted new key %" PRIu64 " (dir=%s, counter=%d, fast_path)",
-				 key, tree->ctl->fp_dir ? "asc" : "desc", tree->ctl->fp_reset_counter);
-			*/
-		else
-			/* elog(LOG, "Radix tree (QuART): inserted new key %" PRIu64 " (dir=%s, counter=%d)",
-				 key, tree->ctl->fp_dir ? "asc" : "desc", tree->ctl->fp_reset_counter);
-			*/
 	}
 	else
 	{
@@ -2248,6 +2249,7 @@ have_slot:
 
 	return found;
 }
+#endif /* 0 */
 #endif /* RT_USE_QUART */
 
 /***************** SETUP / TEARDOWN *****************/
@@ -3428,6 +3430,18 @@ RT_DUMP_NODE(RT_NODE * node)
 #undef RT_QUART_CHECK_ASCENDING
 #undef RT_QUART_CHECK_DESCENDING
 #undef RT_QUART_UPDATE_FP
+#undef RT_QUART_ADD_CHILD_4_CHANGE_FP
+#undef RT_QUART_ADD_CHILD_16_CHANGE_FP
+#undef RT_QUART_ADD_CHILD_48_CHANGE_FP
+#undef RT_QUART_ADD_CHILD_256_CHANGE_FP
+#undef RT_QUART_ADD_CHILD_4_PRESERVE_FP
+#undef RT_QUART_ADD_CHILD_16_PRESERVE_FP
+#undef RT_QUART_ADD_CHILD_48_PRESERVE_FP
+#undef RT_QUART_ADD_CHILD_256_PRESERVE_FP
+#undef RT_NODE_INSERT_CHANGE_FP
+#undef RT_NODE_INSERT_PRESERVE_FP
+#undef RT_QUART_INSERT_RECURSIVE_CHANGE_FP
+#undef RT_QUART_INSERT_RECURSIVE_PRESERVE_FP
 #endif
 #undef RT_BEGIN_ITERATE
 #undef RT_ITERATE_NEXT

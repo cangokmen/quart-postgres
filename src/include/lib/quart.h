@@ -3,16 +3,15 @@
  * quart.h
  *		QuART (Quick Adaptive Radix Tree) extension for radixtree.h
  *
- * This file contains the QuART stail_reset_bidir optimization implementation
+ * This file contains the QuART stail optimization implementation
  * for the adaptive radix tree template. It should be included by radixtree.h
  * when RT_USE_QUART is defined.
  *
  * The QuART optimization implements:
- * - Byte-by-byte comparison of first 3 bytes against fp_leaf_value
- * - Bidirectional pattern detection (ascending/descending)
- * - Bridge value handling for byte boundary crossings
- * - Reset counter (300 iterations) for non-sequential inserts
- * - Fast path insert when first 3 bytes match fp_leaf_value
+ * - Comparison of upper 3 bytes of key against fp_leaf_value
+ * - FP_INSERT: upper 3 bytes match -> fast path insert (preserve_fp)
+ * - BRIDGE: upper 3 bytes adjacent (+/-1 wrapping) -> change_fp from root
+ * - OTHER: reset counter (300 iterations) before falling back to change_fp
  *
  * Note: The RT_QUART_CONTROL_FIELDS and RT_QUART_INIT macros are defined
  * in radixtree.h before the structure definitions.
@@ -28,6 +27,9 @@
 #ifndef RT_USE_QUART
 #error "quart.h should only be included when RT_USE_QUART is defined"
 #endif
+
+/* Number of non-sequential inserts tolerated before resetting the fast path */
+#define RT_QUART_RESET_COUNTER_INIT 16
 
 /*
  * Node-specific insertion functions that update fast path (change_fp variants)
@@ -369,7 +371,7 @@ RT_NODE_INSERT_PRESERVE_FP(RT_RADIX_TREE *tree, RT_PTR_ALLOC *parent_slot,
 /*
  * Recursive insert that updates fast path (change_fp)
  * 
- * Implements the QuART stail_reset_bidir algorithm for sequential insertions.
+ * Implements the QuART stail algorithm for sequential insertions.
  * This version updates the fast path as it traverses, enabling optimized
  * sequential access patterns.
  */
@@ -438,7 +440,7 @@ RT_QUART_INSERT_RECURSIVE_CHANGE_FP(RT_RADIX_TREE *tree, RT_PTR_ALLOC *parent_sl
 /*
  * Recursive insert that preserves fast path (preserve_fp)
  * 
- * Implements non-sequential insertion for QuART stail_reset_bidir.
+ * Implements non-sequential insertion for QuART stail.
  * This version does NOT update the fast path, preserving the existing
  * state for future sequential accesses.
  */
@@ -495,11 +497,10 @@ RT_QUART_INSERT_RECURSIVE_PRESERVE_FP(RT_RADIX_TREE *tree, RT_PTR_ALLOC *parent_
 }
 
 /*
- * QuART stail_reset_bidir main insertion function
+ * QuART stail main insertion function
  * 
- * Implements the exact algorithm from QuART_stail_reset_bidir.h:
+ * Implements the exact algorithm from QuART_stail.h
  * - Byte-by-byte comparison of first 3 bytes against fp_leaf_value
- * - Bidirectional pattern detection (ascending/descending)
  * - Bridge value handling for byte boundary crossings
  * - Reset counter for non-sequential inserts
  * - Fast path insert when first 3 bytes match fp_leaf_value
@@ -524,8 +525,7 @@ RT_SET_QUART(RT_RADIX_TREE *tree, uint64 key, RT_VALUE_TYPE *value_p)
 	/* First insert - always use change_fp to initialize fast path */
 	if (tree->ctl->num_keys == 0)
 	{
-		tree->ctl->fp_dir = true;
-		tree->ctl->fp_reset_counter = 300;
+		tree->ctl->fp_reset_counter = RT_QUART_RESET_COUNTER_INIT;
 		tree->ctl->fp_initialized = true;
 		tree->ctl->fp_path_length = 1;
 		tree->ctl->fp_path[0] = tree->ctl->root;
@@ -541,78 +541,38 @@ RT_SET_QUART(RT_RADIX_TREE *tree, uint64 key, RT_VALUE_TYPE *value_p)
 	fp_leaf_value = tree->ctl->fp_last_key;
 
 	/*
-	 * Compare first 3 bytes of key against fp_leaf_value.
-	 * This implements the core QuART stail_reset_bidir algorithm.
+	 * Classify key relative to fp_leaf_value by comparing the upper 3 bytes.
+	 * FP_INSERT: upper 3 bytes match -> fast path insert
+	 * BRIDGE: upper 3 bytes are adjacent (+/-1, wrapping) -> change_fp from root
+	 * OTHER: unrelated key -> decrement reset counter or reset
 	 */
-	if (tree->ctl->fp_dir)
 	{
-		/* ASCENDING MODE */
-		for (int i = 0; i < 3; i++)
+		uint32 key_upper  = (uint32) ((key >> 8) & 0xFFFFFF);
+		uint32 leaf_upper = (uint32) ((fp_leaf_value >> 8) & 0xFFFFFF);
+
+		if (key_upper == leaf_upper)
 		{
-			uint8 key_byte = (key >> (8 * (3 - i))) & 0xFF;
-			uint8 leaf_byte = (fp_leaf_value >> (8 * (3 - i))) & 0xFF;
-
-			if (key_byte == leaf_byte)
-				continue;  /* Byte matches, check next byte */
-
-			if (key_byte < leaf_byte)
-			{
-				/* Key is less - non-sequential insert with preserve_fp */
-				tree->ctl->fp_reset_counter--;
-				use_preserve_fp = true;
-				goto do_insert;
-			}
-
-			/* key_byte > leaf_byte - check for bridge pattern */
-			if (i == 0)
-			{
-				/* First byte: check for X,255,255 -> X+1,0,0 */
-				if ((key_byte == leaf_byte + 1) && ((key >> 8) & 0xFFFF) == 0 &&
-					((fp_leaf_value >> 8) & 0xFFFF) == 0xFFFF)
-				{
-					/* Bridge value - use change_fp */
-					tree->ctl->fp_reset_counter = 300;
-					tree->ctl->fp_path_length = 1;
-					tree->ctl->fp_path[0] = tree->ctl->root;
-					use_change_fp = true;
-					goto do_insert;
-				}
-			}
-			else if (i == 1)
-			{
-				/* Second byte: check for X,Y,255 -> X,Y+1,0 */
-				if ((key_byte == leaf_byte + 1) && ((key >> 8) & 0xFF) == 0 &&
-					((key >> 24) == (fp_leaf_value >> 24)) &&
-					((fp_leaf_value >> 8) & 0xFF) == 0xFF)
-				{
-					tree->ctl->fp_reset_counter = 300;
-					tree->ctl->fp_path_length = 1;
-					tree->ctl->fp_path[0] = tree->ctl->root;
-					use_change_fp = true;
-					goto do_insert;
-				}
-			}
-			else  /* i == 2 */
-			{
-				/* Third byte: check for X,Y,Z -> X,Y,Z+1 */
-				if ((key_byte == leaf_byte + 1) &&
-					((key >> 16) == (fp_leaf_value >> 16)))
-				{
-					tree->ctl->fp_reset_counter = 300;
-					tree->ctl->fp_path_length = 1;
-					tree->ctl->fp_path[0] = tree->ctl->root;
-					use_change_fp = true;
-					goto do_insert;
-				}
-			}
-
-			/* Not a bridge - non-sequential insert */
+			/* FP_INSERT: first 3 bytes match, use fast path */
+			is_fp_insert = true;
+			tree->ctl->fp_reset_counter = RT_QUART_RESET_COUNTER_INIT;
+		}
+		else if (((key_upper + 1) & 0xFFFFFF) == leaf_upper ||
+				 ((leaf_upper + 1) & 0xFFFFFF) == key_upper)
+		{
+			/* BRIDGE: adjacent prefix, reset fast path from root */
+			tree->ctl->fp_reset_counter = RT_QUART_RESET_COUNTER_INIT;
+			tree->ctl->fp_path_length = 1;
+			tree->ctl->fp_path[0] = tree->ctl->root;
+			use_change_fp = true;
+		}
+		else
+		{
+			/* OTHER: non-sequential insert */
 			if (tree->ctl->fp_reset_counter <= 0)
 			{
-				tree->ctl->fp_reset_counter = 300;
+				tree->ctl->fp_reset_counter = RT_QUART_RESET_COUNTER_INIT;
 				tree->ctl->fp_path_length = 1;
 				tree->ctl->fp_path[0] = tree->ctl->root;
-				tree->ctl->fp_dir = true;
 				use_change_fp = true;
 			}
 			else
@@ -620,119 +580,8 @@ RT_SET_QUART(RT_RADIX_TREE *tree, uint64 key, RT_VALUE_TYPE *value_p)
 				tree->ctl->fp_reset_counter--;
 				use_preserve_fp = true;
 			}
-			goto do_insert;
-		}
-
-		/* All 3 bytes match - check last byte for direction */
-		uint8 key_last = key & 0xFF;
-		uint8 leaf_last = fp_leaf_value & 0xFF;
-
-		if (key_last < leaf_last)
-		{
-			/* Direction change to descending */
-			tree->ctl->fp_dir = false;
-			/* Update fp_last_key with new last byte */
-			tree->ctl->fp_last_key = (fp_leaf_value & 0xFFFFFF00ULL) | key_last;
-		}
-		/* Fast path insert will happen below */
-	}
-	else
-	{
-		/* DESCENDING MODE */
-		for (int i = 0; i < 3; i++)
-		{
-			uint8 key_byte = (key >> (8 * (3 - i))) & 0xFF;
-			uint8 leaf_byte = (fp_leaf_value >> (8 * (3 - i))) & 0xFF;
-
-			if (key_byte == leaf_byte)
-				continue;
-
-			if (key_byte > leaf_byte)
-			{
-				/* Key is greater - non-sequential insert */
-				tree->ctl->fp_reset_counter--;
-				use_preserve_fp = true;
-				goto do_insert;
-			}
-
-			/* key_byte < leaf_byte - check for bridge pattern */
-			if (i == 0)
-			{
-				/* First byte: check for X,0,0 -> X-1,255,255 */
-				if ((leaf_byte == key_byte + 1) && ((fp_leaf_value >> 8) & 0xFFFF) == 0 &&
-					((key >> 8) & 0xFFFF) == 0xFFFF)
-				{
-					tree->ctl->fp_reset_counter = 300;
-					tree->ctl->fp_path_length = 1;
-					tree->ctl->fp_path[0] = tree->ctl->root;
-					use_change_fp = true;
-					goto do_insert;
-				}
-			}
-			else if (i == 1)
-			{
-				/* Second byte: check for X,Y,0 -> X,Y-1,255 */
-				if ((leaf_byte == key_byte + 1) && ((fp_leaf_value >> 8) & 0xFF) == 0 &&
-					((key >> 24) == (fp_leaf_value >> 24)) &&
-					((key >> 8) & 0xFF) == 0xFF)
-				{
-					tree->ctl->fp_reset_counter = 300;
-					tree->ctl->fp_path_length = 1;
-					tree->ctl->fp_path[0] = tree->ctl->root;
-					use_change_fp = true;
-					goto do_insert;
-				}
-			}
-			else  /* i == 2 */
-			{
-				/* Third byte: check for X,Y,Z -> X,Y,Z-1 */
-				if ((leaf_byte == key_byte + 1) &&
-					((key >> 16) == (fp_leaf_value >> 16)))
-				{
-					tree->ctl->fp_reset_counter = 300;
-					tree->ctl->fp_path_length = 1;
-					tree->ctl->fp_path[0] = tree->ctl->root;
-					use_change_fp = true;
-					goto do_insert;
-				}
-			}
-
-			/* Not a bridge - non-sequential insert */
-			if (tree->ctl->fp_reset_counter <= 0)
-			{
-				tree->ctl->fp_reset_counter = 300;
-				tree->ctl->fp_path_length = 1;
-				tree->ctl->fp_path[0] = tree->ctl->root;
-				tree->ctl->fp_dir = true;
-				use_change_fp = true;
-			}
-			else
-			{
-				tree->ctl->fp_reset_counter--;
-				use_preserve_fp = true;
-			}
-			goto do_insert;
-		}
-
-		/* All 3 bytes match - check last byte for direction */
-		uint8 key_last = key & 0xFF;
-		uint8 leaf_last = fp_leaf_value & 0xFF;
-
-		if (key_last > leaf_last)
-		{
-			/* Direction change to ascending */
-			tree->ctl->fp_dir = true;
-			/* Update fp_last_key with new last byte */
-			tree->ctl->fp_last_key = (fp_leaf_value & 0xFFFFFF00ULL) | key_last;
 		}
 	}
-
-	/*
-	 * If we reach here, first 3 bytes matched fp_leaf_value.
-	 * This is a fast path insert - insert using preserve_fp.
-	 */
-	is_fp_insert = true;
-	tree->ctl->fp_reset_counter = 300;
 
 do_insert:
 	if (use_change_fp)
@@ -797,7 +646,6 @@ do_insert:
 		slot = NULL;
 	}
 
-have_slot:
 	Assert(slot != NULL);
 
 	if (RT_VALUE_IS_EMBEDDABLE(value_p))
