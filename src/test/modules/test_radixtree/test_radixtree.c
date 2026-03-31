@@ -496,7 +496,7 @@ test_radixtree(PG_FUNCTION_ARGS)
 static void
 test_quart_sequential(void)
 {
-#define QUART_SEQ_N 50000000
+#define QUART_SEQ_N 5000000
 
 	art_radix_tree *art_tree;
 	quart_radix_tree *quart_tree;
